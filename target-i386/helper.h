@@ -18,6 +18,17 @@ DEF_HELPER_2(divq_EAX, void, env, tl)
 DEF_HELPER_2(idivq_EAX, void, env, tl)
 #endif
 
+#ifdef HAS_TRACEWRAP
+DEF_HELPER_1(trace_newframe, void, i32)
+DEF_HELPER_3(trace_endframe, void, env, i32, i32)
+DEF_HELPER_2(trace_load_reg, void, i32, i32)
+DEF_HELPER_2(trace_store_reg, void, i32, i32)
+DEF_HELPER_3(trace_ld, void, env, i32, i32)
+DEF_HELPER_3(trace_st, void, env, i32, i32)
+DEF_HELPER_1(trace_load_eflags, void, env)
+DEF_HELPER_1(trace_store_eflags, void, env)
+#endif //HAS_TRACEWRAP
+
 DEF_HELPER_2(aam, void, env, int)
 DEF_HELPER_2(aad, void, env, int)
 DEF_HELPER_1(aaa, void, env)

@@ -28,6 +28,10 @@
 #include "disas/disas.h"
 #include "tcg-op.h"
 
+#ifdef HAS_TRACEWRAP
+#include "tracewrap.h"
+#endif //HAS_TRACEWRAP
+
 #include "helper.h"
 #define GEN_HELPER 1
 #include "helper.h"
@@ -122,6 +126,8 @@ typedef struct DisasContext {
     int cpuid_ext2_features;
     int cpuid_ext3_features;
     int cpuid_7_0_ebx_features;
+    target_ulong old_pc;
+    size_t insn_size;
 } DisasContext;
 
 static void gen_eob(DisasContext *s);
@@ -329,19 +335,58 @@ static inline TCGMemOp mo_b_d32(int b, TCGMemOp ot)
 {
     return b & 1 ? (ot == MO_16 ? MO_16 : MO_32) : MO_8;
 }
+#ifdef HAS_TRACEWRAP
+static inline void tcg_gen_deposit_wrap(TCGv_i32 ret, TCGv_i32 arg1,
+                                       TCGv_i32 arg2, unsigned int ofs,
+                                       unsigned int len, int reg);
 
+static inline void tcg_gen_deposit_wrap(TCGv_i32 ret, TCGv_i32 arg1,
+                                       TCGv_i32 arg2, unsigned int ofs,
+                                       unsigned int len, int reg)
+{
+    TCGv t = tcg_const_i32(reg);
+    gen_helper_trace_load_reg(t, arg2);
+    tcg_temp_free(t);
+    tcg_gen_deposit_tl(ret, arg1, arg2, ofs, len);
+}
+#endif //HAS_TRACEWRAP
+
+//Store into register (post-state)
 static void gen_op_mov_reg_v(TCGMemOp ot, int reg, TCGv t0)
 {
+#ifdef HAS_TRACEWRAP
+    TCGv t;
+    if ((ot == MO_8) && (byte_reg_is_xH(reg)))
+    {
+            t = tcg_const_i32(reg - 4);
+    } else {
+            t = tcg_const_i32(reg);
+    }
+    gen_helper_trace_store_reg(t, t0);
+    tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
     switch(ot) {
     case MO_8:
         if (!byte_reg_is_xH(reg)) {
+#ifdef HAS_TRACEWRAP
+            tcg_gen_deposit_wrap(cpu_regs[reg], cpu_regs[reg], t0, 0, 8, reg);
+#else
             tcg_gen_deposit_tl(cpu_regs[reg], cpu_regs[reg], t0, 0, 8);
+#endif //HAS_TRACEWRAP
         } else {
+#ifdef HAS_TRACEWRAP
+            tcg_gen_deposit_wrap(cpu_regs[reg - 4], cpu_regs[reg - 4], t0, 8, 8, reg - 4);
+#else
             tcg_gen_deposit_tl(cpu_regs[reg - 4], cpu_regs[reg - 4], t0, 8, 8);
+#endif //HAS_TRACEWRAP
         }
         break;
     case MO_16:
+#ifdef HAS_TRACEWRAP
+        tcg_gen_deposit_wrap(cpu_regs[reg], cpu_regs[reg], t0, 0, 16, reg);
+#else
         tcg_gen_deposit_tl(cpu_regs[reg], cpu_regs[reg], t0, 0, 16);
+#endif //HAS_TRACEWRAP
         break;
     case MO_32:
         /* For x86_64, this sets the higher half of register to zero.
@@ -358,19 +403,35 @@ static void gen_op_mov_reg_v(TCGMemOp ot, int reg, TCGv t0)
     }
 }
 
+//Load value from register (pre-state)
 static inline void gen_op_mov_v_reg(TCGMemOp ot, TCGv t0, int reg)
 {
     if (ot == MO_8 && byte_reg_is_xH(reg)) {
         tcg_gen_shri_tl(t0, cpu_regs[reg - 4], 8);
         tcg_gen_ext8u_tl(t0, t0);
+#ifdef HAS_TRACEWRAP
+    TCGv t = tcg_const_i32(reg - 4);
+    gen_helper_trace_load_reg(t, cpu_regs[reg - 4]);
+    tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
     } else {
         tcg_gen_mov_tl(t0, cpu_regs[reg]);
+#ifdef HAS_TRACEWRAP
+    TCGv t = tcg_const_i32(reg);
+    gen_helper_trace_load_reg(t, cpu_regs[reg]);
+    tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
     }
 }
 
 static inline void gen_op_movl_A0_reg(int reg)
 {
     tcg_gen_mov_tl(cpu_A0, cpu_regs[reg]);
+#ifdef HAS_TRACEWRAP
+    TCGv t = tcg_const_i32(reg);
+    gen_helper_trace_load_reg(t, cpu_A0);
+    tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
 }
 
 static inline void gen_op_addl_A0_im(int32_t val)
@@ -476,11 +537,17 @@ static inline void gen_op_addq_A0_reg_sN(int shift, int reg)
 static inline void gen_op_ld_v(DisasContext *s, int idx, TCGv t0, TCGv a0)
 {
     tcg_gen_qemu_ld_tl(t0, a0, s->mem_index, idx | MO_LE);
+#ifdef HAS_TRACEWRAP
+    gen_helper_trace_ld(cpu_env, t0, a0);
+#endif //HAS_TRACEWRAP
 }
 
 static inline void gen_op_st_v(DisasContext *s, int idx, TCGv t0, TCGv a0)
 {
     tcg_gen_qemu_st_tl(t0, a0, s->mem_index, idx | MO_LE);
+#ifdef HAS_TRACEWRAP
+    gen_helper_trace_st(cpu_env, t0, a0);
+#endif //HAS_TRACEWRAP
 }
 
 static inline void gen_op_st_rm_T0_A0(DisasContext *s, int idx, int d)
@@ -1899,6 +1966,7 @@ static void gen_lea_modrm(CPUX86State *env, DisasContext *s, int modrm)
         if (base == 4) {
             havesib = 1;
             code = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             scale = (code >> 6) & 3;
             index = ((code >> 3) & 7) | REX_X(s);
             if (index == 4) {
@@ -1913,6 +1981,7 @@ static void gen_lea_modrm(CPUX86State *env, DisasContext *s, int modrm)
             if ((base & 7) == 5) {
                 base = -1;
                 disp = (int32_t)cpu_ldl_code(env, s->pc);
+                s->insn_size +=4;
                 s->pc += 4;
                 if (CODE64(s) && !havesib) {
                     disp += s->pc + s->rip_offset;
@@ -1923,10 +1992,12 @@ static void gen_lea_modrm(CPUX86State *env, DisasContext *s, int modrm)
             break;
         case 1:
             disp = (int8_t)cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             break;
         default:
         case 2:
             disp = (int32_t)cpu_ldl_code(env, s->pc);
+            s->insn_size+=4;
             s->pc += 4;
             break;
         }
@@ -1983,6 +2054,20 @@ static void gen_lea_modrm(CPUX86State *env, DisasContext *s, int modrm)
         if (s->aflag == MO_32) {
             tcg_gen_ext32u_tl(cpu_A0, cpu_A0);
         }
+
+#ifdef HAS_TRACEWRAP
+        if (base >= 0) {
+            TCGv t = tcg_const_i32(base);
+            gen_helper_trace_load_reg(t, cpu_regs[base]);
+            tcg_temp_free(t);
+        }
+        if (index >= 0) {
+            TCGv t = tcg_const_i32(index);
+            gen_helper_trace_load_reg(t, cpu_regs[index]);
+            tcg_temp_free(t);
+        }
+#endif //HAS_TRACEWRAP
+
         break;
 
     case MO_16:
@@ -1990,6 +2075,7 @@ static void gen_lea_modrm(CPUX86State *env, DisasContext *s, int modrm)
         case 0:
             if (rm == 6) {
                 disp = cpu_lduw_code(env, s->pc);
+                s->insn_size+=2;
                 s->pc += 2;
                 tcg_gen_movi_tl(cpu_A0, disp);
                 rm = 0; /* avoid SS override */
@@ -2000,10 +2086,12 @@ static void gen_lea_modrm(CPUX86State *env, DisasContext *s, int modrm)
             break;
         case 1:
             disp = (int8_t)cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             break;
         default:
         case 2:
             disp = (int16_t)cpu_lduw_code(env, s->pc);
+            s->insn_size+=2;
             s->pc += 2;
             break;
         }
@@ -2072,6 +2160,7 @@ static void gen_nop_modrm(CPUX86State *env, DisasContext *s, int modrm)
 
         if (base == 4) {
             code = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             base = (code & 7);
         }
 
@@ -2144,7 +2233,14 @@ static void gen_ldst_modrm(CPUX86State *env, DisasContext *s, int modrm,
 
     mod = (modrm >> 6) & 3;
     rm = (modrm & 7) | REX_B(s);
-    if (mod == 3) {
+
+#ifdef HAS_TRACEWRAP
+    TCGv t = tcg_const_i32(rm);
+    gen_helper_trace_load_reg(t, cpu_regs[rm]);
+    tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
+
+   if (mod == 3) {
         if (is_store) {
             if (reg != OR_TMP0)
                 gen_op_mov_v_reg(ot, cpu_T[0], reg);
@@ -2175,10 +2271,12 @@ static inline uint32_t insn_get(CPUX86State *env, DisasContext *s, TCGMemOp ot)
     switch (ot) {
     case MO_8:
         ret = cpu_ldub_code(env, s->pc);
+        s->insn_size++;
         s->pc++;
         break;
     case MO_16:
         ret = cpu_lduw_code(env, s->pc);
+        s->insn_size+=2;
         s->pc += 2;
         break;
     case MO_32:
@@ -2186,6 +2284,7 @@ static inline uint32_t insn_get(CPUX86State *env, DisasContext *s, TCGMemOp ot)
     case MO_64:
 #endif
         ret = cpu_ldl_code(env, s->pc);
+        s->insn_size+=4;
         s->pc += 4;
         break;
     default:
@@ -2257,6 +2356,11 @@ static void gen_cmovcc1(CPUX86State *env, DisasContext *s, TCGMemOp ot, int b,
                         int modrm, int reg)
 {
     CCPrepare cc;
+#ifdef HAS_TRACEWRAP
+    TCGv t  = tcg_const_i32(reg);
+    gen_helper_trace_load_reg(t, cpu_regs[reg]);
+    tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
 
     gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
 
@@ -2366,6 +2470,12 @@ static void gen_push_v(DisasContext *s, TCGv val)
     int size = 1 << d_ot;
     TCGv new_esp = cpu_A0;
 
+#ifdef HAS_TRACEWRAP
+    TCGv t0 = tcg_const_i32(R_ESP);
+    gen_helper_trace_load_reg(t0, cpu_regs[R_ESP]);
+    tcg_temp_free(t0);
+#endif //HAS_TRACEWRAP
+
     tcg_gen_subi_tl(cpu_A0, cpu_regs[R_ESP], size);
 
     if (CODE64(s)) {
@@ -2396,6 +2506,12 @@ static TCGMemOp gen_pop_T0(DisasContext *s)
 {
     TCGMemOp d_ot = mo_pushpop(s, s->dflag);
     TCGv addr = cpu_A0;
+
+#ifdef HAS_TRACEWRAP
+    TCGv t0 = tcg_const_i32(R_ESP);
+    gen_helper_trace_load_reg(t0, cpu_regs[R_ESP]);
+    tcg_temp_free(t0);
+#endif //HAS_TRACEWRAP
 
     if (CODE64(s)) {
         addr = cpu_regs[R_ESP];
@@ -2546,11 +2662,29 @@ static void gen_debug(DisasContext *s, target_ulong cur_eip)
     s->is_jmp = DISAS_TB_JUMP;
 }
 
+#ifdef HAS_TRACEWRAP
+static inline void gen_trace_endframe(DisasContext *s)
+{
+        gen_update_cc_op(s);
+        gen_helper_trace_store_eflags(cpu_env);
+        TCGv_i32 tmp0 = tcg_temp_new_i32();
+        TCGv_i32 tmp1 = tcg_temp_new_i32();
+        tcg_gen_movi_i32(tmp0, s->old_pc);
+        tcg_gen_movi_i32(tmp1, s->insn_size);
+        gen_helper_trace_endframe(cpu_env, tmp0, tmp1);
+        tcg_temp_free_i32(tmp0);
+        tcg_temp_free_i32(tmp1);
+}
+#endif //HAS_TRACEWRAP
+
 /* generate a generic end of block. Trace exception is also generated
    if needed */
 static void gen_eob(DisasContext *s)
 {
     gen_update_cc_op(s);
+#ifdef HAS_TRACEWRAP
+    gen_trace_endframe(s);
+#endif //HAS_TRACEWRAP
     if (s->tb->flags & HF_INHIBIT_IRQ_MASK) {
         gen_helper_reset_inhibit_irq(cpu_env);
     }
@@ -3041,6 +3175,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
     }
 
     modrm = cpu_ldub_code(env, s->pc++);
+    s->insn_size++;
     reg = ((modrm >> 3) & 7);
     if (is_xmm)
         reg |= rex_r;
@@ -3248,7 +3383,9 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                 if (b1 == 1 && reg != 0)
                     goto illegal_op;
                 field_length = cpu_ldub_code(env, s->pc++) & 0x3F;
+                s->insn_size++;
                 bit_index = cpu_ldub_code(env, s->pc++) & 0x3F;
+                s->insn_size++;
                 tcg_gen_addi_ptr(cpu_ptr0, cpu_env,
                     offsetof(CPUX86State,xmm_regs[reg]));
                 if (b1 == 1)
@@ -3375,9 +3512,10 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
         case 0x172:
         case 0x173:
             if (b1 >= 2) {
-	        goto illegal_op;
+            goto illegal_op;
             }
             val = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             if (is_xmm) {
                 tcg_gen_movi_tl(cpu_T[0], val);
                 tcg_gen_st32_tl(cpu_T[0], cpu_env, offsetof(CPUX86State,xmm_t0.XMM_L(0)));
@@ -3535,6 +3673,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
             s->rip_offset = 1;
             gen_ldst_modrm(env, s, modrm, MO_16, OR_TMP0, 0);
             val = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             if (b1) {
                 val &= 7;
                 tcg_gen_st16_tl(cpu_T[0], cpu_env,
@@ -3551,6 +3690,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                 goto illegal_op;
             ot = mo_64_32(s->dflag);
             val = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             if (b1) {
                 val &= 7;
                 rm = (modrm & 7) | REX_B(s);
@@ -3614,6 +3754,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                 goto do_0f_38_fx;
             }
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             rm = modrm & 7;
             reg = ((modrm >> 3) & 7) | rex_r;
             mod = (modrm >> 6) & 3;
@@ -3691,6 +3832,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
             /* Various integer extensions at 0f 38 f[0-f].  */
             b = modrm | (b1 << 8);
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             reg = ((modrm >> 3) & 7) | rex_r;
 
             switch (b) {
@@ -4052,6 +4194,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
         case 0x13a:
             b = modrm;
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             rm = modrm & 7;
             reg = ((modrm >> 3) & 7) | rex_r;
             mod = (modrm >> 6) & 3;
@@ -4073,6 +4216,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                     gen_lea_modrm(env, s, modrm);
                 reg = ((modrm >> 3) & 7) | rex_r;
                 val = cpu_ldub_code(env, s->pc++);
+                s->insn_size++;
                 switch (b) {
                 case 0x14: /* pextrb */
                     tcg_gen_ld8u_tl(cpu_T[0], cpu_env, offsetof(CPUX86State,
@@ -4221,6 +4365,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                 }
             }
             val = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
 
             if ((b & 0xfc) == 0x60) { /* pcmpXstrX */
                 set_cc_op(s, CC_OP_EFLAGS);
@@ -4240,6 +4385,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
             /* Various integer extensions at 0f 3a f[0-f].  */
             b = modrm | (b1 << 8);
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             reg = ((modrm >> 3) & 7) | rex_r;
 
             switch (b) {
@@ -4252,6 +4398,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                 ot = mo_64_32(s->dflag);
                 gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
                 b = cpu_ldub_code(env, s->pc++);
+                s->insn_size++;
                 if (ot == MO_64) {
                     tcg_gen_rotri_tl(cpu_T[0], cpu_T[0], b & 63);
                 } else {
@@ -4347,6 +4494,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
             if (!(s->cpuid_ext2_features & CPUID_EXT2_3DNOW))
                 goto illegal_op;
             val = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             sse_fn_epp = sse_op_table5[val];
             if (!sse_fn_epp) {
                 goto illegal_op;
@@ -4358,6 +4506,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
         case 0x70: /* pshufx insn */
         case 0xc6: /* pshufx insn */
             val = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             tcg_gen_addi_ptr(cpu_ptr0, cpu_env, op1_offset);
             tcg_gen_addi_ptr(cpu_ptr1, cpu_env, op2_offset);
             /* XXX: introduce a new table? */
@@ -4367,6 +4516,7 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
         case 0xc2:
             /* compare insns */
             val = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             if (val >= 8)
                 goto illegal_op;
             sse_fn_epp = sse_op_table4[val][b1];
@@ -4417,6 +4567,10 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         tcg_gen_debug_insn_start(pc_start);
     }
     s->pc = pc_start;
+#ifdef HAS_TRACEWRAP
+    s->insn_size = 0;
+    TCGv myt;
+#endif //HAS_TRACEWRAP
     prefixes = 0;
     s->override = -1;
     rex_w = -1;
@@ -4431,14 +4585,25 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     s->vex_v = 0;
  next_byte:
     b = cpu_ldub_code(env, s->pc);
+    s->insn_size++;
     s->pc++;
     /* Collect prefixes.  */
     switch (b) {
     case 0xf3:
         prefixes |= PREFIX_REPZ;
+#ifdef HAS_TRACEWRAP
+        myt = tcg_const_i32(R_ECX);
+        gen_helper_trace_load_reg(myt,cpu_regs[R_ECX]);
+        tcg_temp_free(myt);
+#endif //HAS_TRACEWRAP
         goto next_byte;
     case 0xf2:
         prefixes |= PREFIX_REPNZ;
+#ifdef HAS_TRACEWRAP
+        myt = tcg_const_i32(R_ECX);
+        gen_helper_trace_load_reg(myt,cpu_regs[R_ECX]);
+        tcg_temp_free(myt);
+#endif //HAS_TRACEWRAP
         goto next_byte;
     case 0xf0:
         prefixes |= PREFIX_LOCK;
@@ -4460,6 +4625,13 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         goto next_byte;
     case 0x65:
         s->override = R_GS;
+#ifdef HAS_TRACEWRAP
+        TCGv t = tcg_const_i32(R_GS | (1 << SEG_BIT));
+        TCGv t0 = tcg_const_i32(env->segs[R_GS].base);
+        gen_helper_trace_load_reg(t, t0);
+        tcg_temp_free(t);
+        tcg_temp_free(t0);
+#endif //HAS_TRACEWRAP
         goto next_byte;
     case 0x66:
         prefixes |= PREFIX_DATA;
@@ -4489,6 +4661,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
                 0, PREFIX_DATA, PREFIX_REPZ, PREFIX_REPNZ
             };
             int vex3, vex2 = cpu_ldub_code(env, s->pc);
+            s->insn_size++;
 
             if (!CODE64(s) && (vex2 & 0xc0) != 0xc0) {
                 /* 4.1.4.6: In 32-bit mode, bits [7:6] must be 11b,
@@ -4511,16 +4684,19 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             if (b == 0xc5) {
                 vex3 = vex2;
                 b = cpu_ldub_code(env, s->pc++);
+                s->insn_size++;
             } else {
 #ifdef TARGET_X86_64
                 s->rex_x = (~vex2 >> 3) & 8;
                 s->rex_b = (~vex2 >> 2) & 8;
 #endif
                 vex3 = cpu_ldub_code(env, s->pc++);
+                s->insn_size++;
                 rex_w = (vex3 >> 7) & 1;
                 switch (vex2 & 0x1f) {
                 case 0x01: /* Implied 0f leading opcode bytes.  */
                     b = cpu_ldub_code(env, s->pc++) | 0x100;
+                    s->insn_size++;
                     break;
                 case 0x02: /* Implied 0f 38 leading opcode bytes.  */
                     b = 0x138;
@@ -4577,6 +4753,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         /**************************/
         /* extended op code */
         b = cpu_ldub_code(env, s->pc++) | 0x100;
+        s->insn_size++;
         goto reswitch;
 
         /**************************/
@@ -4599,6 +4776,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             switch(f) {
             case 0: /* OP Ev, Gv */
                 modrm = cpu_ldub_code(env, s->pc++);
+                s->insn_size++;
                 reg = ((modrm >> 3) & 7) | rex_r;
                 mod = (modrm >> 6) & 3;
                 rm = (modrm & 7) | REX_B(s);
@@ -4610,6 +4788,9 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
                     /* xor reg, reg optimisation */
                     set_cc_op(s, CC_OP_CLR);
                     tcg_gen_movi_tl(cpu_T[0], 0);
+                    TCGv t = tcg_const_i32(reg);
+                    gen_helper_trace_load_reg(t, cpu_regs[reg]);
+                    tcg_temp_free(t);
                     gen_op_mov_reg_v(ot, reg, cpu_T[0]);
                     break;
                 } else {
@@ -4620,6 +4801,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
                 break;
             case 1: /* OP Gv, Ev */
                 modrm = cpu_ldub_code(env, s->pc++);
+                s->insn_size++;
                 mod = (modrm >> 6) & 3;
                 reg = ((modrm >> 3) & 7) | rex_r;
                 rm = (modrm & 7) | REX_B(s);
@@ -4654,6 +4836,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             ot = mo_b_d(b, dflag);
 
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             mod = (modrm >> 6) & 3;
             rm = (modrm & 7) | REX_B(s);
             op = (modrm >> 3) & 7;
@@ -4700,6 +4883,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         ot = mo_b_d(b, dflag);
 
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         rm = (modrm & 7) | REX_B(s);
         op = (modrm >> 3) & 7;
@@ -4767,12 +4951,25 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             case MO_32:
                 tcg_gen_trunc_tl_i32(cpu_tmp2_i32, cpu_T[0]);
                 tcg_gen_trunc_tl_i32(cpu_tmp3_i32, cpu_regs[R_EAX]);
+#ifdef HAS_TRACEWRAP
+                TCGv t = tcg_const_i32(R_EAX);
+                gen_helper_trace_load_reg(t, cpu_regs[R_EAX]);
+                tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
                 tcg_gen_mulu2_i32(cpu_tmp2_i32, cpu_tmp3_i32,
                                   cpu_tmp2_i32, cpu_tmp3_i32);
                 tcg_gen_extu_i32_tl(cpu_regs[R_EAX], cpu_tmp2_i32);
                 tcg_gen_extu_i32_tl(cpu_regs[R_EDX], cpu_tmp3_i32);
                 tcg_gen_mov_tl(cpu_cc_dst, cpu_regs[R_EAX]);
                 tcg_gen_mov_tl(cpu_cc_src, cpu_regs[R_EDX]);
+#ifdef HAS_TRACEWRAP
+                t = tcg_const_i32(R_EAX);
+                gen_helper_trace_store_reg(t, cpu_regs[R_EAX]);
+                tcg_temp_free(t);
+                t = tcg_const_i32(R_EDX);
+                gen_helper_trace_store_reg(t, cpu_regs[R_EDX]);
+                tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
                 set_cc_op(s, CC_OP_MULL);
                 break;
 #ifdef TARGET_X86_64
@@ -4818,6 +5015,11 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             case MO_32:
                 tcg_gen_trunc_tl_i32(cpu_tmp2_i32, cpu_T[0]);
                 tcg_gen_trunc_tl_i32(cpu_tmp3_i32, cpu_regs[R_EAX]);
+#ifdef HAS_TRACEWRAP
+                TCGv t = tcg_const_i32(R_EAX);
+                gen_helper_trace_load_reg(t, cpu_regs[R_EAX]);
+                tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
                 tcg_gen_muls2_i32(cpu_tmp2_i32, cpu_tmp3_i32,
                                   cpu_tmp2_i32, cpu_tmp3_i32);
                 tcg_gen_extu_i32_tl(cpu_regs[R_EAX], cpu_tmp2_i32);
@@ -4826,6 +5028,15 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
                 tcg_gen_mov_tl(cpu_cc_dst, cpu_regs[R_EAX]);
                 tcg_gen_sub_i32(cpu_tmp2_i32, cpu_tmp2_i32, cpu_tmp3_i32);
                 tcg_gen_extu_i32_tl(cpu_cc_src, cpu_tmp2_i32);
+#ifdef HAS_TRACEWRAP
+                t = tcg_const_i32(R_EAX);
+                gen_helper_trace_store_reg(t, cpu_regs[R_EAX]);
+                tcg_temp_free(t);
+                t = tcg_const_i32(R_EDX);
+                gen_helper_trace_store_reg(t, cpu_regs[R_EDX]);
+                tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
+
                 set_cc_op(s, CC_OP_MULL);
                 break;
 #ifdef TARGET_X86_64
@@ -4853,7 +5064,20 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             default:
             case MO_32:
                 gen_jmp_im(pc_start - s->cs_base);
+#ifdef HAS_TRACEWRAP
+                TCGv t = tcg_const_i32(R_EAX);
+                gen_helper_trace_load_reg(t, cpu_regs[R_EAX]);
+                tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
                 gen_helper_divl_EAX(cpu_env, cpu_T[0]);
+#ifdef HAS_TRACEWRAP
+                t = tcg_const_i32(R_EAX);
+                gen_helper_trace_load_reg(t, cpu_regs[R_EAX]);
+                tcg_temp_free(t);
+                t = tcg_const_i32(R_EDX);
+                gen_helper_trace_load_reg(t, cpu_regs[R_EDX]);
+                tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
                 break;
 #ifdef TARGET_X86_64
             case MO_64:
@@ -4896,6 +5120,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         ot = mo_b_d(b, dflag);
 
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         rm = (modrm & 7) | REX_B(s);
         op = (modrm >> 3) & 7;
@@ -5004,6 +5229,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         ot = mo_b_d(b, dflag);
 
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
 
         gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
@@ -5076,6 +5302,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x6b:
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
         if (b == 0x69)
             s->rip_offset = insn_const_size(ot);
@@ -5128,6 +5355,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x1c1: /* xadd Ev, Gv */
         ot = mo_b_d(b, dflag);
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
         mod = (modrm >> 6) & 3;
         if (mod == 3) {
@@ -5156,6 +5384,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
 
             ot = mo_b_d(b, dflag);
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             reg = ((modrm >> 3) & 7) | rex_r;
             mod = (modrm >> 6) & 3;
             t0 = tcg_temp_local_new();
@@ -5174,6 +5403,11 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             }
             label1 = gen_new_label();
             tcg_gen_mov_tl(t2, cpu_regs[R_EAX]);
+#ifdef HAS_TRACEWRAP
+            TCGv t = tcg_const_i32(R_EAX);
+            gen_helper_trace_load_reg(t, cpu_regs[R_EAX]);
+            tcg_temp_free(t);
+#endif //HAS_TRACEWRAP
             gen_extu(ot, t0);
             gen_extu(ot, t2);
             tcg_gen_brcond_tl(TCG_COND_EQ, t2, t0, label1);
@@ -5206,6 +5440,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x1c7: /* cmpxchg8b */
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         if ((mod == 3) || ((modrm & 0x38) != 0x8))
             goto illegal_op;
@@ -5264,6 +5499,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x8f: /* pop Ev */
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         ot = gen_pop_T0(s);
         if (mod == 3) {
@@ -5283,8 +5519,10 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         {
             int level;
             val = cpu_lduw_code(env, s->pc);
+            s->insn_size+=2;
             s->pc += 2;
             level = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             gen_enter(s, val, level);
         }
         break;
@@ -5357,6 +5595,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x89: /* mov Gv, Ev */
         ot = mo_b_d(b, dflag);
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
 
         /* generate a generic store */
@@ -5366,6 +5605,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0xc7: /* mov Ev, Iv */
         ot = mo_b_d(b, dflag);
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         if (mod != 3) {
             s->rip_offset = insn_const_size(ot);
@@ -5383,6 +5623,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x8b: /* mov Ev, Gv */
         ot = mo_b_d(b, dflag);
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
 
         gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
@@ -5390,6 +5631,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x8e: /* mov seg, Gv */
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = (modrm >> 3) & 7;
         if (reg >= 6 || reg == R_CS)
             goto illegal_op;
@@ -5410,6 +5652,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x8c: /* mov Gv, seg */
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = (modrm >> 3) & 7;
         mod = (modrm >> 6) & 3;
         if (reg >= 6)
@@ -5435,6 +5678,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             s_ot = b & 8 ? MO_SIGN | ot : ot;
 
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             reg = ((modrm >> 3) & 7) | rex_r;
             mod = (modrm >> 6) & 3;
             rm = (modrm & 7) | REX_B(s);
@@ -5468,6 +5712,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x8d: /* lea */
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         if (mod == 3)
             goto illegal_op;
@@ -5556,6 +5801,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x87: /* xchg Ev, Gv */
         ot = mo_b_d(b, dflag);
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
         mod = (modrm >> 6) & 3;
         if (mod == 3) {
@@ -5597,6 +5843,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     do_lxx:
         ot = dflag != MO_16 ? MO_32 : MO_16;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
         mod = (modrm >> 6) & 3;
         if (mod == 3)
@@ -5625,6 +5872,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         {
             ot = mo_b_d(b, dflag);
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             mod = (modrm >> 6) & 3;
             op = (modrm >> 3) & 7;
 
@@ -5644,6 +5892,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             } else {
                 if (shift == 2) {
                     shift = cpu_ldub_code(env, s->pc++);
+                    s->insn_size++;
                 }
                 gen_shifti(s, op, ot, opreg, shift);
             }
@@ -5673,11 +5922,17 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         shift = 1;
         goto do_shiftd;
     case 0x1ad: /* shrd cl */
+#ifdef HAS_TRACEWRAP
+            myt = tcg_const_i32(R_ECX);
+            gen_helper_trace_load_reg(myt,cpu_regs[R_ECX]);
+            tcg_temp_free(myt);
+#endif //HAS_TRACEWRAP
         op = 1;
         shift = 0;
     do_shiftd:
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         rm = (modrm & 7) | REX_B(s);
         reg = ((modrm >> 3) & 7) | rex_r;
@@ -5691,6 +5946,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
 
         if (shift) {
             TCGv imm = tcg_const_tl(cpu_ldub_code(env, s->pc++));
+            s->insn_size++;
             gen_shiftd_rm_T1(s, ot, opreg, op, imm);
             tcg_temp_free(imm);
         } else {
@@ -5708,6 +5964,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             break;
         }
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         rm = modrm & 7;
         op = ((b & 7) << 3) | ((modrm >> 3) & 7);
@@ -6310,6 +6567,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0xe5:
         ot = mo_b_d32(b, dflag);
         val = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         tcg_gen_movi_tl(cpu_T[0], val);
         gen_check_io(s, ot, pc_start - s->cs_base,
                      SVM_IOIO_TYPE_MASK | svm_is_rep(prefixes));
@@ -6327,6 +6585,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0xe7:
         ot = mo_b_d32(b, dflag);
         val = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         tcg_gen_movi_tl(cpu_T[0], val);
         gen_check_io(s, ot, pc_start - s->cs_base,
                      svm_is_rep(prefixes));
@@ -6381,6 +6640,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         /* control */
     case 0xc2: /* ret im */
         val = cpu_ldsw_code(env, s->pc);
+        s->insn_size+=2;
         s->pc += 2;
         ot = gen_pop_T0(s);
         gen_stack_update(s, val + (1 << ot));
@@ -6397,6 +6657,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0xca: /* lret im */
         val = cpu_ldsw_code(env, s->pc);
+        s->insn_size+=2;
         s->pc += 2;
     do_lret:
         if (s->pe && !s->vm86) {
@@ -6534,6 +6795,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
 
     case 0x190 ... 0x19f: /* setcc Gv */
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         gen_setcc1(s, b, cpu_T[0]);
         gen_ldst_modrm(env, s, modrm, MO_8, OR_TMP0, 1);
         break;
@@ -6543,6 +6805,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         }
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
         gen_cmovcc1(env, s, ot, b, modrm, reg);
         break;
@@ -6660,6 +6923,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x1ba: /* bt/bts/btr/btc Gv, im */
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         op = (modrm >> 3) & 7;
         mod = (modrm >> 6) & 3;
         rm = (modrm & 7) | REX_B(s);
@@ -6672,6 +6936,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         }
         /* load shift */
         val = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         tcg_gen_movi_tl(cpu_T[1], val);
         if (op < 4)
             goto illegal_op;
@@ -6691,6 +6956,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     do_btx:
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
         mod = (modrm >> 6) & 3;
         rm = (modrm & 7) | REX_B(s);
@@ -6749,6 +7015,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
     case 0x1bd: /* bsr / lzcnt */
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
         gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
         gen_extu(ot, cpu_T[0]);
@@ -6832,6 +7099,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         if (CODE64(s))
             goto illegal_op;
         val = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         if (val == 0) {
             gen_exception(s, EXCP00_DIVZ, pc_start - s->cs_base);
         } else {
@@ -6843,6 +7111,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         if (CODE64(s))
             goto illegal_op;
         val = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         gen_helper_aad(cpu_env, tcg_const_i32(val));
         set_cc_op(s, CC_OP_LOGICB);
         break;
@@ -6879,6 +7148,10 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0xcd: /* int N */
         val = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
+#ifdef HAS_TRACEWRAP
+        gen_trace_endframe(s);
+#endif //HAS_TRACEWRAP
         if (s->vm86 && s->iopl != 3) {
             gen_exception(s, EXCP0D_GPF, pc_start - s->cs_base);
         } else {
@@ -6948,6 +7221,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             goto illegal_op;
         ot = dflag;
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = (modrm >> 3) & 7;
         mod = (modrm >> 6) & 3;
         if (mod == 3)
@@ -7126,6 +7400,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x100:
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         op = (modrm >> 3) & 7;
         switch(op) {
@@ -7190,6 +7465,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x101:
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         op = (modrm >> 3) & 7;
         rm = modrm & 7;
@@ -7467,6 +7743,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             d_ot = dflag;
 
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             reg = ((modrm >> 3) & 7) | rex_r;
             mod = (modrm >> 6) & 3;
             rm = (modrm & 7) | REX_B(s);
@@ -7496,6 +7773,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             t2 = tcg_temp_local_new();
             ot = MO_16;
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             reg = (modrm >> 3) & 7;
             mod = (modrm >> 6) & 3;
             rm = modrm & 7;
@@ -7541,6 +7819,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
                 goto illegal_op;
             ot = dflag != MO_16 ? MO_32 : MO_16;
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             reg = ((modrm >> 3) & 7) | rex_r;
             gen_ldst_modrm(env, s, modrm, MO_16, OR_TMP0, 0);
             t0 = tcg_temp_local_new();
@@ -7561,6 +7840,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x118:
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         op = (modrm >> 3) & 7;
         switch(op) {
@@ -7580,6 +7860,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x119 ... 0x11f: /* nop (multi byte) */
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         gen_nop_modrm(env, s, modrm);
         break;
     case 0x120: /* mov reg, crN */
@@ -7588,6 +7869,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             gen_exception(s, EXCP0D_GPF, pc_start - s->cs_base);
         } else {
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             /* Ignore the mod bits (assume (modrm&0xc0)==0xc0).
              * AMD documentation (24594.pdf) and testing of
              * intel 386 and 486 processors all show that the mod bits
@@ -7633,6 +7915,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             gen_exception(s, EXCP0D_GPF, pc_start - s->cs_base);
         } else {
             modrm = cpu_ldub_code(env, s->pc++);
+            s->insn_size++;
             /* Ignore the mod bits (assume (modrm&0xc0)==0xc0).
              * AMD documentation (24594.pdf) and testing of
              * intel 386 and 486 processors all show that the mod bits
@@ -7677,6 +7960,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             goto illegal_op;
         ot = mo_64_32(dflag);
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         if (mod == 3)
             goto illegal_op;
@@ -7686,6 +7970,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x1ae:
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         op = (modrm >> 3) & 7;
         switch(op) {
@@ -7758,6 +8043,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
         break;
     case 0x10d: /* 3DNow! prefetch(w) */
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         mod = (modrm >> 6) & 3;
         if (mod == 3)
             goto illegal_op;
@@ -7781,6 +8067,7 @@ static target_ulong disas_insn(CPUX86State *env, DisasContext *s,
             goto illegal_op;
 
         modrm = cpu_ldub_code(env, s->pc++);
+        s->insn_size++;
         reg = ((modrm >> 3) & 7) | rex_r;
 
         if (s->prefix & PREFIX_DATA) {
@@ -7928,12 +8215,16 @@ static inline void gen_intermediate_code_internal(X86CPU *cpu,
     dc->code64 = (flags >> HF_CS64_SHIFT) & 1;
 #endif
     dc->flags = flags;
+#ifdef HAS_TRACEWRAP
+    dc->jmp_opt = 0;
+#else
     dc->jmp_opt = !(dc->tf || cs->singlestep_enabled ||
                     (flags & HF_INHIBIT_IRQ_MASK)
 #ifndef CONFIG_SOFTMMU
                     || (flags & HF_SOFTMMU_MASK)
 #endif
                     );
+#endif //HAS_TRACEWRAP
 #if 0
     /* check addseg logic */
     if (!dc->addseg && (dc->vm86 || !dc->pe || !dc->code32))
@@ -7989,7 +8280,17 @@ static inline void gen_intermediate_code_internal(X86CPU *cpu,
         if (num_insns + 1 == max_insns && (tb->cflags & CF_LAST_IO))
             gen_io_start();
 
+#ifdef HAS_TRACEWRAP
+        dc->old_pc = pc_ptr;
+        TCGv t = tcg_const_i32(pc_ptr);
+        gen_helper_trace_newframe(t);
+        tcg_temp_free(t);
+        gen_helper_trace_load_eflags(cpu_env);
+#endif //HAS_TRACEWRAP
         pc_ptr = disas_insn(env, dc, pc_ptr);
+#ifdef HAS_TRACEWRAP
+        gen_trace_endframe(dc);
+#endif //HAS_TRACEWRAP
         num_insns++;
         /* stop translation if indicated */
         if (dc->is_jmp)
