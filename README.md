@@ -48,7 +48,7 @@ $ git clone https://github.com/BinaryAnalysisPlatform/bap-traces.git
 Download qemu tracer with following command
 
 ```bash
-$ git clone clone git@github.com:BinaryAnalysisPlatform/qemu.git -b tracewrap
+$ git clone git@github.com:BinaryAnalysisPlatform/qemu.git -b tracewrap
 ```
 
 Change folder to qemu and build tracer with command
