@@ -1,9 +1,9 @@
 # Overview
 
-Qemu tracer - tracer based on [qemu](https://github.com/qemu/qemu)
-project. It executes binary executable and saves trace data using
+Qemu tracer - a tracer based on [qemu](https://github.com/qemu/qemu)
+project. It executes a binary executable and saves trace data using
 [Protocol Buffer](https://developers.google.com/protocol-buffers/)
-format. The contents of the trace data defined in
+format. The contents of the trace data is defined in
 [bap-traces](https://github.com/BinaryAnalysisPlatform/bap-traces)
 project.
 
@@ -27,7 +27,7 @@ To install autoconf, libtool, protobuf-c-compiler, use the
 following command
 
 ```bash
-$ sudo apt-get autoconf libtool protobuf-c-compiler
+$ sudo apt-get install autoconf libtool protobuf-c-compiler
 ```
 
 To install [piqi library](http://piqi.org/doc/ocaml) with
