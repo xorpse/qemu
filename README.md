@@ -54,7 +54,8 @@ $ git clone git@github.com:BinaryAnalysisPlatform/qemu.git -b tracewrap
 Change folder to qemu and build tracer with command
 ```bash
 $ ./configure --prefix=$HOME --with-tracewrap=`realpath ../bap-traces` \
---extra-ldflags=-Lprotobuf --target-list=arm-linux-user
+--extra-ldflags=-Lprotobuf --target-list="arm-linux-user i386-linux-user \
+mips-linux-user"
 $ make -C protobuf
 $ make
 $ make install
@@ -65,11 +66,14 @@ $ make install
 To run executable `exec` and to save the trace data to `exec.trace`, use
 
 ```bash
-$ qemu-arm -tracefile exec.trace exec
+$ qemu-arm -tracefile exec.trace exec # trace ARM target executable
+$ qemu-i386 -tracefile exec.trace exec # trace X86 target executable
+$ qemu-mips -tracefile exec.trace exec # trace MIPS target executable
 ```
 
 Hints: use option -L to set the elf interpreter prefix to 'path'. Use
-fetchlibs.sh to download arm libraries.
+[fetchlibs.sh](https://raw.githubusercontent.com/BinaryAnalysisPlatform/bap-traces/master/test/fetchlibs.sh)
+to download arm and x86 libraries.
 
 # Notes
-  Only ARM target is supported in this branch.
+  Only ARM, X86, MIPS targets are supported in this branch.
