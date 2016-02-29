@@ -12,7 +12,7 @@ void HELPER(trace_newframe)(target_ulong pc)
 	qemu_trace_newframe(pc, 0);
 }
 
-void HELPER(trace_endframe)(CPUMIPSState *env, target_ulong old_pc, size_t size)
+void HELPER(trace_endframe)(CPUMIPSState *env, target_ulong old_pc, uint32_t size)
 {
 	qemu_trace_endframe(env, old_pc, size);
 }
@@ -84,7 +84,7 @@ void HELPER(trace_store_reg)(uint32_t reg, uint32_t val)
 //}
 //
 
-OperandInfo * load_store_mem(uint32_t addr, uint32_t val, int ls)
+OperandInfo * load_store_mem(uint32_t addr, uint32_t val, int ls, int len)
 {
         MemOperand * mo = (MemOperand *)malloc(sizeof(MemOperand));
         mem_operand__init(mo);
@@ -105,12 +105,12 @@ OperandInfo * load_store_mem(uint32_t addr, uint32_t val, int ls)
         }
         OperandInfo *oi = (OperandInfo *)malloc(sizeof(OperandInfo));
         operand_info__init(oi);
-        oi->bit_length = 0;
+        oi->bit_length = len*8;
         oi->operand_info_specific = ois;
         oi->operand_usage = ou;
-        oi->value.len = 4;
+        oi->value.len = len;
         oi->value.data = malloc(oi->value.len);
-        memcpy(oi->value.data, &val, 4);
+        memcpy(oi->value.data, &val, len);
 
         return oi;
 }
@@ -119,7 +119,7 @@ void HELPER(trace_ld)(CPUMIPSState *env, uint32_t val, uint32_t addr)
 {
         qemu_log("This was a read 0x%x addr:0x%x value:0x%x\n", env->active_tc.PC, addr, val);
 
-        OperandInfo *oi = load_store_mem(addr, val, 0);
+        OperandInfo *oi = load_store_mem(addr, val, 0, 4);
 
         qemu_trace_add_operand(oi, 0x1);
 }
@@ -128,7 +128,7 @@ void HELPER(trace_st)(CPUMIPSState *env, uint32_t val, uint32_t addr)
 {
         qemu_log("This was a store 0x%x addr:0x%x value:0x%x\n", env->active_tc.PC, addr, val);
 
-        OperandInfo *oi = load_store_mem(addr, val, 1);
+        OperandInfo *oi = load_store_mem(addr, val, 1, 4);
 
         qemu_trace_add_operand(oi, 0x2);
 }
