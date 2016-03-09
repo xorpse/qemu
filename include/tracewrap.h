@@ -15,13 +15,13 @@ struct toc_entry {
 
 extern FILE *qemu_tracefile;
 void qemu_trace(Frame frame);
-void qemu_trace_newframe(uint64_t addr, int tread_id);
+void qemu_trace_newframe(target_ulong addr, int tread_id);
 void qemu_trace_add_operand(OperandInfo *oi, int inout);
-void qemu_trace_endframe(CPUArchState *env, target_ulong pc, size_t size);
+void qemu_trace_endframe(CPUArchState *env, target_ulong pc, target_ulong size);
 void qemu_trace_finish(uint32_t exit_code);
 
-OperandInfo * load_store_reg(uint32_t reg, uint32_t val, int ls);
-OperandInfo * load_store_mem(uint32_t addr, uint32_t val, int ls, int len);
+OperandInfo * load_store_reg(target_ulong reg, target_ulong val, int ls);
+OperandInfo * load_store_mem(target_ulong addr, target_ulong val, int ls, int len);
 
 #define REG_CPSR 64
 #define REG_APSR 65
