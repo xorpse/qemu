@@ -26,7 +26,7 @@ void do_qemu_set_trace(const char *tracefilename)
         cur_toc_entry = toc;
 }
 
-void qemu_trace_newframe(uint64_t addr, int thread_id)
+void qemu_trace_newframe(target_ulong addr, int thread_id)
 {
     if (open_frame)
     {
@@ -106,7 +106,7 @@ void qemu_trace_add_operand(OperandInfo *oi, int inout)
     ol->elem[ol->n_elem - 1] = oi;
 }
 
-void qemu_trace_endframe(CPUArchState *env, target_ulong pc, size_t size)
+void qemu_trace_endframe(CPUArchState *env, target_ulong pc, target_ulong size)
 {
     if (! open_frame) {
         return;
