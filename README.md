@@ -53,7 +53,7 @@ $ git clone git@github.com:BinaryAnalysisPlatform/qemu.git -b tracewrap
 
 Change folder to qemu and build tracer with command
 ```bash
-$ ./configure --prefix=$HOME --with-tracewrap=`realpath ../bap-traces` \
+$ ./configure --prefix=$HOME --with-tracewrap=`realpath ../bap-frames` \
 --extra-ldflags=-Lprotobuf --target-list="arm-linux-user i386-linux-user \
 x86_64-linux-user mips-linux-user"
 $ make -C protobuf
