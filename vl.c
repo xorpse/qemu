@@ -3921,7 +3921,7 @@ int main(int argc, char **argv, char **envp)
     }
 
 #ifdef HAS_TRACEWRAP
-    do_qemu_set_trace(tracefile);
+    do_qemu_set_trace(tracefile,0,NULL);
 #endif
 
     loc_set_none();
