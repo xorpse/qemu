@@ -3690,7 +3690,7 @@ static const struct qemu_argument arg_table[] = {
      "",           "display version information and exit"},
 #ifdef HAS_TRACEWRAP
     {"tracefile",  "", true, handle_trace_filename,
-     "file", "path to trace file (defaults to stdout)"},
+     "file", "path to trace file (defaults to <target>.frames)"},
 #endif //HAS_TRACEWRAP
     {NULL, NULL, false, NULL, NULL, NULL}
 };
@@ -4016,7 +4016,8 @@ int main(int argc, char **argv, char **envp)
 
 
 #ifdef HAS_TRACEWRAP
-    qemu_trace_init(qemu_tracefilename, target_argc, target_argv);
+    qemu_trace_init(qemu_tracefilename, filename,
+        argv, environ, target_argv, target_environ);
 #endif //HAS_TRACEWRAP
 
     ts = g_malloc0 (sizeof(TaskState));

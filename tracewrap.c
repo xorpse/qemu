@@ -1,8 +1,20 @@
 #include "tracewrap.h"
 #include "trace_consts.h"
 
+#include <glib.h>
 #include <err.h>
 #include "qemu/log.h"
+
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include <limits.h>
+#include <stdlib.h>
+
+
+char tracer_name[] = "qemu";
+char tracer_version[] = "2.0.0/tracewrap";
 
 static Frame * g_frame;
 static uint64_t frames_per_toc_entry = 64LL;
@@ -16,16 +28,28 @@ static int toc_entries = 0;
 static int toc_capacity = 0;
 static uint64_t toc_num_frames = 0;
 
-#define WRITE(x) do {                                       \
-        if (!file)                                          \
-            err(1, "qemu_trace is not initialized");        \
-        if (fwrite(&(x), sizeof(x),1,file) != 1)            \
-            err(1, "fwrite failed");                        \
+#define MD5LEN 16
+static guchar target_md5[MD5LEN];
+static char target_path[PATH_MAX] = "unknown";
+
+
+#define WRITE(x) do {                                   \
+        if (!file)                                      \
+            err(1, "qemu_trace is not initialized");    \
+        if (fwrite(&(x), sizeof(x),1,file) != 1)        \
+            err(1, "fwrite failed");                    \
+    } while(0)
+
+#define WRITE_BUF(x,n) do {                                 \
+        if (!file)                                      \
+            err(1, "qemu_trace is not initialized");    \
+        if (fwrite((x),(n),1,file) != 1)                 \
+            err(1, "fwrite failed");                    \
     } while(0)
 
 #define SEEK(off) do {                          \
-    if (fseek(file,(off), SEEK_SET) < 0)        \
-        err(1, "stream not seekable");          \
+        if (fseek(file,(off), SEEK_SET) < 0)    \
+            err(1, "stream not seekable");      \
     } while(0)
 
 
@@ -67,7 +91,7 @@ static void toc_update(void) {
     }
 }
 
-static void init_header(void) {
+static void write_header(void) {
     uint64_t toc_off = 0L;
     WRITE(magic_number);
     WRITE(out_trace_version);
@@ -77,24 +101,157 @@ static void init_header(void) {
     WRITE(toc_off);
 }
 
-void qemu_trace_init(const char *name, int argc, char **argv) {
+static int list_length(char **list) {
+    int n=0;
+    if (list) {
+        char **p = list;
+        for (;*p;p++,n++);
+    }
+    return n;
+}
+
+static void compute_target_md5(void) {
+    const GChecksumType md5 = G_CHECKSUM_MD5;
+    GChecksum *cs = g_checksum_new(md5);
+    FILE *target = fopen(target_path, "r");
+    guchar buf[BUFSIZ];
+    gsize expected_length = MD5LEN;
+
+    if (!cs) err(1, "failed to create a checksum");
+    if (!target) err(1, "failed to open target binary");
+    if (g_checksum_type_get_length(md5) != expected_length) abort();
+
+    while (!feof(target)) {
+        size_t len = fread(buf,1,BUFSIZ,target);
+        if (ferror(target))
+            err(1, "failed to read target binary");
+        g_checksum_update(cs, buf, len);
+    }
+
+    g_checksum_get_digest(cs, target_md5, &expected_length);
+    fclose(target);
+}
+
+static void store_to_trace(ProtobufCBuffer *self, size_t len, const uint8_t *data) {
+    WRITE_BUF(data,len);
+}
+
+static void init_tracer(Tracer *tracer, char **argv, char **envp) {
+    tracer__init(tracer);
+    tracer->name = tracer_name;
+    tracer->n_args = list_length(argv);
+    tracer->args = argv;
+    tracer->n_envp = list_length(envp);
+    tracer->envp = envp;
+    tracer->version = tracer_version;
+}
+
+static void init_target(Target *target, char **argv, char **envp) {
+    compute_target_md5();
+
+    target__init(target);
+    target->path = target_path;
+    target->n_args = list_length(argv);
+    target->args = argv;
+    target->n_envp = list_length(envp);
+    target->envp = envp;
+    target->md5sum.len = MD5LEN;
+    target->md5sum.data = target_md5;
+}
+
+#ifdef G_OS_UNIX
+static void unix_fill_fstats(Fstats *fstats, char *path) {
+    struct stat stats;
+    if (stat(path, &stats) < 0)
+        err(1, "failed to obtain file stats");
+
+    fstats->size  = stats.st_size;
+    fstats->atime = stats.st_atime;
+    fstats->mtime = stats.st_mtime;
+    fstats->ctime = stats.st_ctime;
+}
+#endif
+
+
+static void init_fstats(Fstats *fstats) {
+    fstats__init(fstats);
+#ifdef G_OS_UNIX
+    unix_fill_fstats(fstats, target_path);
+#endif
+}
+
+
+static void write_meta(
+    char **tracer_argv,
+    char **tracer_envp,
+    char **target_argv,
+    char **target_envp)
+{
+    MetaFrame meta;
+    Tracer tracer;
+    Target target;
+    Fstats fstats;
+    ProtobufCBuffer buffer;
+
+    buffer.append = store_to_trace;
+
+
+    meta_frame__init(&meta);
+    init_tracer(&tracer, tracer_argv, tracer_envp);
+    init_target(&target, target_argv, target_envp);
+    init_fstats(&fstats);
+
+    meta.tracer = &tracer;
+    meta.target = &target;
+    meta.fstats = &fstats;
+    meta.time = time(NULL);
+    char *user = g_strdup(g_get_real_name());
+    meta.user = user;
+
+    char *host = g_strdup(g_get_host_name());
+    meta.host = host;
+
+    uint64_t size = meta_frame__get_packed_size(&meta);
+    WRITE(size);
+
+    meta_frame__pack_to_buffer(&meta, &buffer);
+
+    free(user);
+    free(host);
+}
+
+
+void qemu_trace_init(const char *filename,
+                     const char *targetname,
+                     char **argv, char **envp,
+                     char **target_argv,
+                     char **target_envp) {
     qemu_log("Initializing tracer\n");
-    name = name ? g_strdup(name) : g_strdup_printf("%s.frames", basename(argv[0]));
+    if (realpath(targetname,target_path) == NULL)
+        err(1, "can't get target path");
+
+
+    char *name = filename
+        ? g_strdup(filename)
+        : g_strdup_printf("%s.frames", basename(target_path));
     file = fopen(name, "wb");
     if (file == NULL)
         err(1, "tracewrap: can't open trace file %s", name);
-    init_header();
+    write_header();
+    write_meta(argv, envp, target_argv, target_envp);
     toc_init();
+    g_free(name);
 }
 
-void qemu_trace_newframe(target_ulong addr, int thread_id) {
+
+void qemu_trace_newframe(target_ulong addr, int __unused/*thread_id*/ ) {
+    int thread_id = 1;
     if (open_frame) {
         qemu_log("frame is still open");
         qemu_trace_endframe(NULL, 0, 0);
     }
 
     open_frame = 1;
-    thread_id = 1;
     g_frame = g_new(Frame,1);
     frame__init(g_frame);
 
@@ -174,9 +331,7 @@ void qemu_trace_endframe(CPUArchState *env, target_ulong pc, target_ulong size) 
     uint8_t *packed_buffer = g_alloca(msg_size);
     uint64_t packed_size = frame__pack(g_frame, packed_buffer);
     WRITE(packed_size);
-    if (fwrite(packed_buffer, packed_size, 1, file) != 1)
-        err(1, "failed to write a frame");
-
+    WRITE_BUF(packed_buffer, packed_size);
     toc_update();
 
     //counting num_frames in newframe does not work by far ...
@@ -199,5 +354,6 @@ void qemu_trace_endframe(CPUArchState *env, target_ulong pc, target_ulong size) 
 
 void qemu_trace_finish(uint32_t exit_code) {
     toc_write();
-    fclose(file);
+    if (fclose(file) != 0)
+        err(1,"failed to write trace file, the file maybe corrupted");
 }

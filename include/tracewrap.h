@@ -8,7 +8,33 @@
 #include "frame.piqi.pb-c.h"
 
 
-void qemu_trace_init(const char *file, int argc, char **argv);
+/** initializes trace subsystem.
+
+    All pointers are owned by the caller.
+
+    @param filename a name of filesystem entry where trace will be dumpled,
+           if NULL then the name is basename(argv[0]).frames
+
+    @param targetname a path to the executable, must be non NULL
+
+
+    @param argv a full list of arguments passed to the tracer, NULL terminated.
+           Can be NULL or empty (i.e., contain only a NULL element).
+           The list may include target arguments.
+
+    @param envp a null terminated list of environment parameters,
+           can be NULL or empty.
+
+    @param target_argv a null terminated list of target arguments,
+           can be NULL or empty.
+
+    @param target_envp a null terminated list of target environment,
+           can be NULL or empty.
+ */
+void qemu_trace_init(const char *filename, const char *targetname,
+                     char **argv, char **envp,
+                     char **target_argv,
+                     char **target_envp);
 void qemu_trace_newframe(target_ulong addr, int tread_id);
 void qemu_trace_add_operand(OperandInfo *oi, int inout);
 void qemu_trace_endframe(CPUArchState *env, target_ulong pc, target_ulong size);
