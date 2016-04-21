@@ -7,12 +7,36 @@ format. The contents of the trace data is defined in
 [bap-traces](https://github.com/BinaryAnalysisPlatform/bap-traces)
 project.
 
-# Preparing to build
+# Installing released binaries
 
-Note: building instructions assume that you're using Ubuntu, but it
+If you don't want to mess with the source and building, then you can just 
+dowload a tarball with prebuilt binaries. Look at the latest release and 
+it might happen, that we have built binaries for your linux distribution,
+if it is not the case, then create an issue, and we will build it for you.
+
+Let's pretend, that you're using Ubuntu Trusty, and install it. First 
+download it with your favorite downloader:
+
+```
+wget https://github.com/BinaryAnalysisPlatform/qemu/releases/download/v2.0.0-tracewrap-alpha/qemu-tracewrap-ubuntu-14.04.4-LTS.tgz
+```
+
+Install it in the specified prefix with a command like `tar -C <prefix> -xf qemu-tracewrap-ubuntu-14.04.4-LTS.tgz`, e.g., 
+to install in your home directory:
+```
+tar -C $HOME -xf qemu-tracewrap-ubuntu-14.04.4-LTS.tgz
+```
+
+
+
+# Build
+
+## Preparation
+
+Note: the instructions assume that you're using Ubuntu, but it
 may work on other systems, that uses apt-get.
 
-Before build qemu tracer, you need to install following packages:
+Before building the qemu-tracewrap, you need to install the following packages:
    * qemu build dependencies
    * autoconf, libtool, protobuf-c-compiler
    * [piqi library](http://piqi.org/doc/ocaml)
@@ -36,7 +60,7 @@ To install [piqi library](http://piqi.org/doc/ocaml) with
 $ opam install piqi
 ```
 
-# Build process
+## Building
 
 Download [bap-traces](https://github.com/BinaryAnalysisPlatform/bap-traces) with
 following command
