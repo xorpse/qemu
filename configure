@@ -749,13 +749,13 @@ for opt do
   ;;
   --with-trace-file=*) trace_file="$optarg"
   ;;
-  --with-tracewrap=*) 
+  --with-tracewrap=*)
     tracewrap="yes"
-    TRACEWRAP_DIR="$optarg"
-    QEMU_INCLUDES="$QEMU_INCLUDES -I\$(SRC_PATH)/protobuf/ "
+    TRACEWRAP_DIR="`realpath $optarg`"
+    QEMU_INCLUDES="$QEMU_INCLUDES -I\$(SRC_PATH)/protobuf/ -I$TRACEWRAP_DIR/libtrace/src/"
     QEMU_CFLAGS="$QEMU_CFLAGS -L\$(SRC_PATH)/protobuf -DHAS_TRACEWRAP "
-    LIBS="$LIBS -ltrace -lprotobuf-c "
-  ;;  
+    LIBS="$LIBS -lprotoframes -lprotobuf-c "
+  ;;
   --enable-gprof) gprof="yes"
   ;;
   --enable-gcov) gcov="yes"
@@ -5227,4 +5227,3 @@ printf "exec" >>config.status
 printf " '%s'" "$0" "$@" >>config.status
 echo >>config.status
 chmod +x config.status
-
