@@ -9,19 +9,19 @@ project.
 
 # Installing released binaries
 
-If you don't want to mess with the source and building, then you can just 
-dowload a tarball with prebuilt binaries. Look at the latest release and 
+If you don't want to mess with the source and building, then you can just
+dowload a tarball with prebuilt binaries. Look at the latest release and
 it might happen, that we have built binaries for your linux distribution,
 if it is not the case, then create an issue, and we will build it for you.
 
-Let's pretend, that you're using Ubuntu Trusty, and install it. First 
+Let's pretend, that you're using Ubuntu Trusty, and install it. First
 download it with your favorite downloader:
 
 ```
 wget https://github.com/BinaryAnalysisPlatform/qemu/releases/download/v2.0.0-tracewrap-alpha/qemu-tracewrap-ubuntu-14.04.4-LTS.tgz
 ```
 
-Install it in the specified prefix with a command like `tar -C <prefix> -xf qemu-tracewrap-ubuntu-14.04.4-LTS.tgz`, e.g., 
+Install it in the specified prefix with a command like `tar -C <prefix> -xf qemu-tracewrap-ubuntu-14.04.4-LTS.tgz`, e.g.,
 to install in your home directory:
 ```
 tar -C $HOME -xf qemu-tracewrap-ubuntu-14.04.4-LTS.tgz
@@ -62,42 +62,36 @@ $ opam install piqi
 
 ## Building
 
-Download [bap-traces](https://github.com/BinaryAnalysisPlatform/bap-traces) with
+Download [bap-frames](https://github.com/BinaryAnalysisPlatform/bap-frames) with
 following command
 
 ```bash
-$ git clone https://github.com/BinaryAnalysisPlatform/bap-traces.git
+$ git clone https://github.com/BinaryAnalysisPlatform/bap-frames.git
 ```
 
 Download qemu tracer with following command
 
 ```bash
-$ git clone git@github.com:BinaryAnalysisPlatform/qemu.git -b tracewrap
+$ git clone git@github.com:BinaryAnalysisPlatform/qemu.git
 ```
 
-Change folder to qemu and build tracer with command
+Change folder to qemu and build tracer:
 ```bash
-$ ./configure --prefix=$HOME --with-tracewrap=`realpath ../bap-frames` \
---extra-ldflags=-Lprotobuf --target-list="arm-linux-user i386-linux-user \
-x86_64-linux-user mips-linux-user"
-$ make -C protobuf
+$ cd qemu
+$ ./configure --prefix=$HOME --with-tracewrap=../bap-frames --target-list="`echo {arm,i386,x86_64,mips}-linux-user`"
 $ make
 $ make install
 ```
 
 # Usage
 
-To run executable `exec` and to save the trace data to `exec.trace`, use
+To run executable `exec` compiled for `arch`, use `qemu-arch exec` command, e.g.,
+`qemu-x86_64 /bin/ls`. It will dump the trace into `ls.frames` file. You can configure
+the filename with `-tracefile` option, e.g., `qemu-arm -tracefile arm.ls.frames ls`
 
-```bash
-$ qemu-arm -tracefile exec.trace exec # trace ARM target executable
-$ qemu-i386 -tracefile exec.trace exec # trace X86 target executable
-$ qemu-x86_64 -tracefile exec.trace exec # trace X86-64 target executable
-$ qemu-mips -tracefile exec.trace exec # trace MIPS target executable
-```
 
 Hints: use option -L to set the elf interpreter prefix to 'path'. Use
-[fetchlibs.sh](https://raw.githubusercontent.com/BinaryAnalysisPlatform/bap-traces/master/test/fetchlibs.sh)
+[fetchlibs.sh](https://raw.githubusercontent.com/BinaryAnalysisPlatform/bap-frames/master/test/fetchlibs.sh)
 to download arm and x86 libraries.
 
 # Notes

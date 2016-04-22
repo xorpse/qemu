@@ -117,3 +117,6 @@ cscope.*
 tags
 TAGS
 *~
+/protobuf/frame.piqi.pb-c.c
+/protobuf/frame.piqi.pb-c.h
+/protobuf/frame.piqi.proto

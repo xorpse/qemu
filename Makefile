@@ -9,6 +9,14 @@ ifneq ($(wildcard config-host.mak),)
 all:
 include config-host.mak
 
+ifeq ($(HAS_TRACEWRAP),y)
+all: protoframes
+
+protoframes:
+		make -C protobuf
+endif
+
+
 # Check that we're not trying to do an out-of-tree build from
 # a tree that's been used for an in-tree build.
 ifneq ($(realpath $(SRC_PATH)),$(realpath .))
@@ -146,7 +154,12 @@ ifeq ($(CONFIG_SMARTCARD_NSS),y)
 include $(SRC_PATH)/libcacard/Makefile
 endif
 
+
+
+
 all: $(DOCS) $(TOOLS) $(HELPERS-y) recurse-all modules
+
+
 
 vl.o: QEMU_CFLAGS+=$(GPROF_CFLAGS)
 

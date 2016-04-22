@@ -95,8 +95,8 @@ static void write_header(void) {
     uint64_t toc_off = 0L;
     WRITE(magic_number);
     WRITE(out_trace_version);
-    WRITE(bfd_arch);
-    WRITE(bfd_machine);
+    WRITE(frame_arch);
+    WRITE(frame_mach);
     WRITE(toc_num_frames);
     WRITE(toc_off);
 }

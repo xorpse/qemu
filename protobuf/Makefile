@@ -4,11 +4,12 @@ CC=gcc
 
 FILENAME=frame.piqi
 EXT=pb-c
+PROTOFILE=$(TRACEWRAP_DIR)/piqi/$(FILENAME)
 
-all: libtrace.a
+all: libprotoframes.a
 
-$(FILENAME).proto:
-	piqi to-proto $(TRACEWRAP_DIR)/$(FILENAME) -o $(FILENAME).proto
+$(FILENAME).proto: $(PROTOFILE)
+	piqi to-proto $(PROTOFILE) -o $(FILENAME).proto
 
 $(FILENAME).$(EXT).c: $(FILENAME).proto
 	protoc-c --c_out=. $(FILENAME).proto
@@ -18,8 +19,8 @@ $(FILENAME).$(EXT).c: $(FILENAME).proto
 $(FILENAME).$(EXT).o: $(FILENAME).$(EXT).c $(FILENAME).$(EXT).h
 	$(CC) -fPIC -c -o $(FILENAME).$(EXT).o $(FILENAME).$(EXT).c
 
-libtrace.a: $(FILENAME).$(EXT).o
-	ar rcs libtrace.a $(FILENAME).$(EXT).o
+libprotoframes.a: $(FILENAME).$(EXT).o
+	ar rcs libprotoframes.a $(FILENAME).$(EXT).o
 
 clean:
-	rm libtrace.a $(FILENAME).$(EXT).[hco]
+	rm $(FILENAME).$(EXT).[hco] $(FILENAME).proto

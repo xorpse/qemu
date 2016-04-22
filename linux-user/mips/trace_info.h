@@ -1,7 +1,6 @@
 #pragma once
 
-#include "disas/bfd.h"
+#include "frame_arch.h"
 
-const uint64_t bfd_arch = bfd_arch_mips;
-const uint64_t bfd_machine = 32 ; /* bfd_mach_mipsisa32 */
-/* our bfd.h is so outdated, that it doesn't include it.*/
+const uint64_t frame_arch = frame_arch_mips;
+const uint64_t frame_mach = frame_mach_mipsisa32 ;
