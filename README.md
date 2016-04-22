@@ -18,7 +18,7 @@ Let's pretend, that you're using Ubuntu Trusty, and install it. First
 download it with your favorite downloader:
 
 ```
-wget https://github.com/BinaryAnalysisPlatform/qemu/releases/download/v2.0.0-tracewrap-alpha/qemu-tracewrap-ubuntu-14.04.4-LTS.tgz
+wget https://github.com/BinaryAnalysisPlatform/qemu/releases/download/v2.0.0-tracewrap-2.0.0-rc1/qemu-tracewrap-ubuntu-14.04.4-LTS.tgz
 ```
 
 Install it in the specified prefix with a command like `tar -C <prefix> -xf qemu-tracewrap-ubuntu-14.04.4-LTS.tgz`, e.g.,
