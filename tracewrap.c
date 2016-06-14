@@ -43,7 +43,7 @@ static char target_path[PATH_MAX] = "unknown";
 #define WRITE_BUF(x,n) do {                                 \
         if (!file)                                      \
             err(1, "qemu_trace is not initialized");    \
-        if (fwrite((x),(n),1,file) != 1)                 \
+        if (fwrite((x),1,(n),file) != n)                  \
             err(1, "fwrite failed");                    \
     } while(0)
 
