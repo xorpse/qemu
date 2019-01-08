@@ -83,6 +83,16 @@ $ make
 $ make install
 ```
 
+## Arch-linux (~2019)
+
+The configure command should be amended to:
+
+```bash
+$ ./configure --prefix=$HOME/opt --python=/usr/bin/python2 --cc=/usr/bin/gcc-4.4 --cxx=/usr/bin/g++-4.4  --with-tracewrap=../bap-frames --target-list="`echo {arm,i386,x86_64,mips}-linux-user`"
+```
+
+Note the use of gcc44 aur package and the addition of python version switch.
+
 # Usage
 
 To run executable `exec` compiled for `arch`, use `qemu-arch exec` command, e.g.,
